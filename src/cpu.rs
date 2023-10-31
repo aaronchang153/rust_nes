@@ -81,7 +81,7 @@ impl Cpu6502 {
 
     // Add with Carry
     fn ex_adc(&mut self, mode: AddressMode) -> Result<(), String> {
-        let mut result: u16 = (self.acc as u16) + self.get_operand(mode)?;
+        let mut result: u16 = (self.acc as u16) + (self.get_operand(mode)? as u16);
         if self.flags.carry {
             result += 1;
         }
@@ -104,7 +104,14 @@ impl Cpu6502 {
         Ok(())
     }
 
-    fn ex_and(&mut self, _mode: AddressMode) -> Result<(), String> {
+    fn ex_and(&mut self, mode: AddressMode) -> Result<(), String> {
+        let result: u8 = self.acc & ((self.get_operand(mode)? & 0xFF) as u8);
+        if result == 0 {
+            self.flags.zero = true;
+        }
+        if (result & 0x80) != 0 {
+            self.flags.negative = true;
+        }
         Ok(())
     }
 
@@ -340,50 +347,59 @@ impl Cpu6502 {
         result
     }
 
-    fn get_operand(&mut self, mode: AddressMode) -> Result<u16, String> {
-        let m: u16;
+    fn get_operand(&mut self, mode: AddressMode) -> Result<u8, String> {
+        //Indirect and Relative mode will be handled by individial instructions
+        let m: u8;
         match mode {
             AddressMode::Immediate => {
-                m = self.read_mem_u8(self.pc) as u16;
+                m = self.read_mem_u8(self.pc);
                 self.pc += 1;
             }
             AddressMode::ZeroPage => {
                 let temp = self.read_mem_u8(self.pc) as u16;
                 self.pc += 1;
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
             }
             AddressMode::ZeroPageX => {
                 let temp = ((self.read_mem_u8(self.pc) as u16) + (self.x as u16)) & 0xFF;
                 self.pc += 1;
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
+            }
+            AddressMode::ZeroPageY => {
+                let temp = ((self.read_mem_u8(self.pc) as u16) + (self.y as u16)) & 0xFF;
+                self.pc += 1;
+                m = self.read_mem_u8(temp);
             }
             AddressMode::Absolute => {
                 let temp = self.read_mem_u16(self.pc);
                 self.pc += 2;
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
             }
             AddressMode::AbsoluteX => {
                 let temp = self.read_mem_u16(self.pc) + (self.x as u16);
                 self.pc += 2;
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
             }
             AddressMode::AbsoluteY => {
                 let temp = self.read_mem_u16(self.pc) + (self.y as u16);
                 self.pc += 2;
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
             }
             AddressMode::IndexedIndirect => {
                 let mut temp = (self.read_mem_u8(self.pc) as u16) + (self.x as u16);
                 self.pc += 1;
                 temp = self.read_mem_u16(temp & 0xFF);
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
             }
             AddressMode::IndirectIndexed => {
                 let mut temp = self.read_mem_u8(self.pc) as u16;
                 self.pc += 1;
                 temp = self.read_mem_u16(temp);
                 temp += self.y as u16;
-                m = self.read_mem_u8(temp) as u16;
+                m = self.read_mem_u8(temp);
+            }
+            AddressMode::Accumulator => {
+                m = self.acc;
             }
             _ => { return Err("Invalid address mode".to_string()); }
         }
