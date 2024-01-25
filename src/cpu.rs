@@ -38,6 +38,12 @@ enum AddressMode {
     NA,
 }
 
+enum InstOperand {
+    Acc,
+    Imm(u8),
+    Mem(u16),
+}
+
 impl CpuFlags {
     fn new() -> Self {
         CpuFlags {
@@ -81,7 +87,12 @@ impl Cpu6502 {
 
     // Add with Carry
     fn ex_adc(&mut self, mode: AddressMode) -> Result<(), String> {
-        let mut result: u16 = (self.acc as u16) + (self.get_operand(mode)? as u16);
+        let m = match self.get_operand(mode)? {
+            InstOperand::Imm(i) => i,
+            InstOperand::Mem(addr) => self.read_mem_u8(addr),
+            _ => { return Err("Invalid mode for ADC instruction".to_string()); }
+        };
+        let mut result: u16 = (self.acc as u16) + (m as u16);
         if self.flags.carry {
             result += 1;
         }
@@ -104,8 +115,14 @@ impl Cpu6502 {
         Ok(())
     }
 
+    // Logical AND
     fn ex_and(&mut self, mode: AddressMode) -> Result<(), String> {
-        let result: u8 = self.acc & ((self.get_operand(mode)? & 0xFF) as u8);
+        let m = match self.get_operand(mode)? {
+            InstOperand::Imm(i) => i,
+            InstOperand::Mem(addr) => self.read_mem_u8(addr),
+            _ => { return Err("Invalid mode for AND instruction".to_string()); }
+        };
+        let result: u8 = self.acc & m;
         if result == 0 {
             self.flags.zero = true;
         }
@@ -115,35 +132,102 @@ impl Cpu6502 {
         Ok(())
     }
 
-    fn ex_asl(&mut self, _mode: AddressMode) -> Result<(), String> {
+    // Arithmetic Shift Left
+    fn ex_asl(&mut self, mode: AddressMode) -> Result<(), String> {
+        let m: &mut u8 = match self.get_operand(mode)? {
+            InstOperand::Acc => &mut self.acc,
+            InstOperand::Mem(addr) => &mut self.mem[addr as usize],
+            _ => { return Err("Invalid mode for ASL instruction".to_string()); }
+        };
+
+        if (*m & 0x80) != 0 {
+            self.flags.carry = true;
+        }
+        *m <<= 1;
+        if *m == 0 {
+            self.flags.zero = true;
+        } else if (*m & 0x80) != 0 {
+            self.flags.negative = true;
+        }
         Ok(())
     }
 
+    // Branch if Carry Clear
     fn ex_bcc(&mut self, _mode: AddressMode) -> Result<(), String> {
+        let offset: u16 = self.read_mem_u8(self.pc) as i8 as i16 as u16; //cast for sign extend
+        self.pc += 1;
+        if !self.flags.carry {
+            self.pc += offset;
+        }
         Ok(())
     }
 
+    // Branch if Carry Set
     fn ex_bcs(&mut self, _mode: AddressMode) -> Result<(), String> {
+        let offset: u16 = self.read_mem_u8(self.pc) as i8 as i16 as u16; //cast for sign extend
+        self.pc += 1;
+        if self.flags.carry {
+            self.pc += offset;
+        }
         Ok(())
     }
 
+    // Branch if Equal
     fn ex_beq(&mut self, _mode: AddressMode) -> Result<(), String> {
+        let offset: u16 = self.read_mem_u8(self.pc) as i8 as i16 as u16; //cast for sign extend
+        self.pc += 1;
+        if self.flags.zero {
+            self.pc += offset;
+        }
         Ok(())
     }
 
-    fn ex_bit(&mut self, _mode: AddressMode) -> Result<(), String> {
+    // Bit Test
+    fn ex_bit(&mut self, mode: AddressMode) -> Result<(), String> {
+        let m = match self.get_operand(mode)? {
+            InstOperand::Mem(addr) => self.read_mem_u8(addr),
+            _ => { return Err("Invalid mode for BIT instruction".to_string()); }
+        };
+        let result = self.acc & m;
+        if result == 0 {
+            self.flags.zero = true;
+        }
+        if (result & 0x40) != 0 {
+            self.flags.overflow = true;
+        }
+        if (result & 0x80) != 0 {
+            self.flags.negative = true;
+        }
         Ok(())
     }
 
+    // Branch if Minus
     fn ex_bmi(&mut self, _mode: AddressMode) -> Result<(), String> {
+        let offset: u16 = self.read_mem_u8(self.pc) as i8 as i16 as u16; //cast for sign extend
+        self.pc += 1;
+        if self.flags.negative {
+            self.pc += offset;
+        }
         Ok(())
     }
 
+    // Branch if Not Equal
     fn ex_bne(&mut self, _mode: AddressMode) -> Result<(), String> {
+        let offset: u16 = self.read_mem_u8(self.pc) as i8 as i16 as u16; //cast for sign extend
+        self.pc += 1;
+        if !self.flags.zero {
+            self.pc += offset;
+        }
         Ok(())
     }
 
+    // Branch if Positive
     fn ex_bpl(&mut self, _mode: AddressMode) -> Result<(), String> {
+        let offset: u16 = self.read_mem_u8(self.pc) as i8 as i16 as u16; //cast for sign extend
+        self.pc += 1;
+        if !self.flags.negative {
+            self.pc += offset;
+        }
         Ok(())
     }
 
@@ -347,59 +431,59 @@ impl Cpu6502 {
         result
     }
 
-    fn get_operand(&mut self, mode: AddressMode) -> Result<u8, String> {
+    fn get_operand(&mut self, mode: AddressMode) -> Result<InstOperand, String> {
         //Indirect and Relative mode will be handled by individial instructions
-        let m: u8;
+        let m: InstOperand;
         match mode {
             AddressMode::Immediate => {
-                m = self.read_mem_u8(self.pc);
+                m = InstOperand::Imm(self.read_mem_u8(self.pc));
                 self.pc += 1;
             }
             AddressMode::ZeroPage => {
                 let temp = self.read_mem_u8(self.pc) as u16;
                 self.pc += 1;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::ZeroPageX => {
                 let temp = ((self.read_mem_u8(self.pc) as u16) + (self.x as u16)) & 0xFF;
                 self.pc += 1;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::ZeroPageY => {
                 let temp = ((self.read_mem_u8(self.pc) as u16) + (self.y as u16)) & 0xFF;
                 self.pc += 1;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::Absolute => {
                 let temp = self.read_mem_u16(self.pc);
                 self.pc += 2;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::AbsoluteX => {
                 let temp = self.read_mem_u16(self.pc) + (self.x as u16);
                 self.pc += 2;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::AbsoluteY => {
                 let temp = self.read_mem_u16(self.pc) + (self.y as u16);
                 self.pc += 2;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::IndexedIndirect => {
                 let mut temp = (self.read_mem_u8(self.pc) as u16) + (self.x as u16);
                 self.pc += 1;
                 temp = self.read_mem_u16(temp & 0xFF);
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::IndirectIndexed => {
                 let mut temp = self.read_mem_u8(self.pc) as u16;
                 self.pc += 1;
                 temp = self.read_mem_u16(temp);
                 temp += self.y as u16;
-                m = self.read_mem_u8(temp);
+                m = InstOperand::Mem(temp);
             }
             AddressMode::Accumulator => {
-                m = self.acc;
+                m = InstOperand::Acc;
             }
             _ => { return Err("Invalid address mode".to_string()); }
         }
